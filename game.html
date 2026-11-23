@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Star Catcher — built from one prompt</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0d0a1a; }
+  body { font-family: "Inter", "Segoe UI", system-ui, sans-serif; }
+  #game { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #hint {
+    position: fixed; left: 0; right: 0; bottom: 18px; text-align: center;
+    color: rgba(255,255,255,.55); font-size: 15px; letter-spacing: .08em;
+    pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hint">&#8592; &#8594; MOVE &nbsp;·&nbsp; CATCH 20 STARS TO WIN</div>
+<script>
+"use strict";
+// STAR CATCHER — a tiny arcade game built from one prompt:
+// "catch falling stars in a basket. Arrow keys or mouse to move, +1 per star,
+//  miss 3 and it's over, win at 20 stars. One HTML file, no network."
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  basket.y = H - 110;
+  basket.x = Math.min(Math.max(basket.x, basket.w / 2), W - basket.w / 2);
+}
+window.addEventListener('resize', resize);
+
+const WIN_SCORE = 20, MAX_LIVES = 3;
+const basket = { x: 270, y: 0, w: 118, h: 26, speed: 620 };
+const keys = { left: false, right: false };
+let stars = [], parts = [], bgStars = [];
+let score = 0, lives = MAX_LIVES, over = false, won = false;
+let spawnT = 0, elapsed = 0, last = performance.now(), flash = 0;
+
+for (let i = 0; i < 70; i++)
+  bgStars.push({ x: Math.random(), y: Math.random(), r: Math.random() * 1.6 + 0.4, tw: Math.random() * 6.28 });
+
+function spawnStar() {
+  const fast = 150 + score * 11 + Math.random() * 70;
+  stars.push({
+    x: 30 + Math.random() * (W - 60),
+    y: -30, r: 15 + Math.random() * 7,
+    vy: fast, vx: (Math.random() - 0.5) * 50,
+    rot: Math.random() * 6.28, vr: (Math.random() - 0.5) * 2.4,
+    hue: 45 + Math.random() * 12
+  });
+}
+function burst(x, y, color) {
+  for (let i = 0; i < 14; i++) {
+    const a = Math.random() * 6.28, s = 60 + Math.random() * 160;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, life: 0.55, color });
+  }
+}
+function reset() {
+  stars = []; parts = []; score = 0; lives = MAX_LIVES;
+  over = false; won = false; spawnT = 0; elapsed = 0; flash = 0;
+  basket.x = W / 2;
+}
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') { keys.left = true; e.preventDefault(); }
+  if (e.key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
+  if ((e.key === 'r' || e.key === 'R' || e.key === ' ') && over) reset();
+});
+window.addEventListener('keyup', e => {
+  if (e.key === 'ArrowLeft') keys.left = false;
+  if (e.key === 'ArrowRight') keys.right = false;
+});
+function pointerMove(clientX) { basket.x = clientX; }
+window.addEventListener('pointermove', e => pointerMove(e.clientX));
+window.addEventListener('pointerdown', e => { pointerMove(e.clientX); if (over) reset(); });
+
+function drawHeart(x, y, s, color) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s / 16, s / 16);
+  ctx.beginPath();
+  ctx.moveTo(0, 5);
+  ctx.bezierCurveTo(-11, -6, -6, -14, 0, -7);
+  ctx.bezierCurveTo(6, -14, 11, -6, 0, 5);
+  ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+function drawStar(x, y, r, rot, color) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 === 0 ? r : r * 0.45, a = -Math.PI / 2 + i * Math.PI / 5;
+    ctx[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+function step(now) {
+  const dt = Math.min((now - last) / 1000, 0.05); last = now;
+  if (!over) {
+    elapsed += dt;
+    if (keys.left) basket.x -= basket.speed * dt;
+    if (keys.right) basket.x += basket.speed * dt;
+    basket.x = Math.min(Math.max(basket.x, basket.w / 2), W - basket.w / 2);
+    spawnT -= dt;
+    if (spawnT <= 0) { spawnStar(); spawnT = Math.max(0.32, 0.85 - score * 0.02); }
+    for (const s of stars) {
+      s.y += s.vy * dt; s.x += s.vx * dt; s.rot += s.vr * dt;
+      if (s.x < 15) { s.x = 15; s.vx = Math.abs(s.vx); }
+      if (s.x > W - 15) { s.x = W - 15; s.vx = -Math.abs(s.vx); }
+    }
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      const caught = s.y + s.r >= basket.y - 6 && s.y <= basket.y + basket.h &&
+        Math.abs(s.x - basket.x) < basket.w / 2 + s.r * 0.6;
+      if (caught) {
+        score++; flash = 0.18; burst(s.x, s.y, '#ffd94a');
+        stars.splice(i, 1);
+        if (score >= WIN_SCORE) { won = true; over = true; }
+        continue;
+      }
+      if (s.y - s.r > H) {
+        stars.splice(i, 1); lives--; flash = 0.25;
+        if (lives <= 0) { over = true; won = false; }
+      }
+    }
+  }
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]; p.life -= dt;
+    if (p.life <= 0) { parts.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 260 * dt;
+  }
+  if (flash > 0) flash -= dt;
+  draw();
+  requestAnimationFrame(step);
+}
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#171233'); g.addColorStop(0.6, '#0d0a1a'); g.addColorStop(1, '#120e26');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  const t = performance.now() / 1000;
+  for (const b of bgStars) {
+    ctx.globalAlpha = 0.35 + 0.3 * Math.sin(t * 1.5 + b.tw);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(b.x * W, b.y * H, b.r, 0, 6.29); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // basket
+  ctx.fillStyle = '#c41c83';
+  ctx.beginPath();
+  ctx.roundRect(basket.x - basket.w / 2, basket.y, basket.w, basket.h, 12);
+  ctx.fill();
+  ctx.fillStyle = '#ff5db1';
+  ctx.fillRect(basket.x - basket.w / 2 + 8, basket.y + 4, basket.w - 16, 5);
+  // stars
+  for (const s of stars) drawStar(s.x, s.y, s.r, s.rot, `hsl(${s.hue} 100% 62%)`);
+  // particles
+  for (const p of parts) {
+    ctx.globalAlpha = Math.max(p.life / 0.55, 0);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 6.29); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // HUD
+  ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center';
+  ctx.font = '800 64px Inter, "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(String(score), W / 2, 92);
+  ctx.font = '700 22px Inter, "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,.65)';
+  ctx.fillText('STARS  ·  ' + WIN_SCORE + ' TO WIN', W / 2, 126);
+  ctx.textAlign = 'right';
+  for (let i = 0; i < MAX_LIVES; i++)
+    drawHeart(W - 34 - i * 42, 78, 17, i < lives ? '#ff3c5a' : 'rgba(255,255,255,.20)');
+  ctx.textAlign = 'left'; ctx.font = '800 26px Inter, "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = '#ff5db1';
+  ctx.fillText('★ STAR CATCHER', 24, 92);
+  if (flash > 0) {
+    ctx.fillStyle = won ? 'rgba(255,217,74,' + flash * 0.9 + ')' : 'rgba(255,60,90,' + flash * 0.7 + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+  if (over) {
+    ctx.fillStyle = 'rgba(10,6,24,.72)'; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = won ? '#ffd94a' : '#ffffff';
+    ctx.font = '800 84px Inter, "Segoe UI", system-ui, sans-serif';
+    ctx.fillText(won ? 'YOU WIN!' : 'GAME OVER', W / 2, H / 2 - 30);
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.font = '600 34px Inter, "Segoe UI", system-ui, sans-serif';
+    ctx.fillText(won ? '20 stars caught — the agent did it!' : 'Score ' + score + ' — so close!',
+      W / 2, H / 2 + 40);
+    ctx.font = '600 28px Inter, "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.fillText('press R to play again', W / 2, H / 2 + 100);
+  }
+}
+// Handle for the play-test driver (reads state, presses keys). Harmless in play.
+window.GAME = {
+  get score() { return score; }, get lives() { return lives; },
+  get over() { return over; }, get won() { return won; },
+  get basketX() { return basket.x; }, get width() { return W; },
+  get stars() { return stars.map(s => ({ x: s.x, y: s.y })); },
+  reset
+};
+resize();
+requestAnimationFrame(step);
+</script>
+</body>
+</html>
